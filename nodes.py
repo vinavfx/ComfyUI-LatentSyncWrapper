@@ -187,32 +187,69 @@ def import_inference_script(script_path):
 
     return module
 
-def check_ffmpeg():
+def add_ffmpeg_to_path(ffmpeg_path):
+    executable_name = (
+        "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
+    )
+    alias_directory = os.path.join(MODULE_TEMP_DIR, "ffmpeg")
+    alias_path = os.path.join(alias_directory, executable_name)
+    os.makedirs(alias_directory, exist_ok=True)
+
+    if os.path.lexists(alias_path):
+        os.remove(alias_path)
+
     try:
-        if platform.system() == "Windows":
-            # Check if ffmpeg exists in PATH
-            ffmpeg_path = shutil.which("ffmpeg.exe")
-            if ffmpeg_path is None:
-                # Look for ffmpeg in common locations
-                possible_paths = [
-                    os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "ffmpeg", "bin"),
-                    os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "ffmpeg", "bin"),
-                    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg", "bin"),
-                ]
-                for path in possible_paths:
-                    if os.path.exists(os.path.join(path, "ffmpeg.exe")):
-                        # Add to PATH
-                        os.environ["PATH"] = path + os.pathsep + os.environ.get("PATH", "")
-                        return True
-                print("FFmpeg not found. Please install FFmpeg and add it to PATH")
-                return False
-            return True
-        else:
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-            return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("FFmpeg not found. Please install FFmpeg")
+        os.symlink(ffmpeg_path, alias_path)
+    except OSError:
+        try:
+            os.link(ffmpeg_path, alias_path)
+        except OSError:
+            shutil.copy2(ffmpeg_path, alias_path)
+
+    os.environ["IMAGEIO_FFMPEG_EXE"] = ffmpeg_path
+    current_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = alias_directory + os.pathsep + current_path
+    return alias_path
+
+
+def get_imageio_ffmpeg_path():
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe  # type: ignore
+    except ImportError:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "imageio-ffmpeg"]
+        )
+        from imageio_ffmpeg import get_ffmpeg_exe  # type: ignore
+
+    return get_ffmpeg_exe()
+
+
+def check_ffmpeg():
+    executable_name = (
+        "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
+    )
+    ffmpeg_path = shutil.which(executable_name)
+
+    if ffmpeg_path is None:
+        try:
+            ffmpeg_path = add_ffmpeg_to_path(get_imageio_ffmpeg_path())
+            print(f"Using FFmpeg provided by imageio-ffmpeg: {ffmpeg_path}")
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+            print(f"FFmpeg is unavailable: {error}")
+            return False
+
+    try:
+        subprocess.run(
+            [ffmpeg_path, "-version"],
+            capture_output=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as error:
+        print(f"FFmpeg validation failed: {error}")
         return False
+
+    return True
+
 
 def check_and_install_dependencies():
     if not check_ffmpeg():
