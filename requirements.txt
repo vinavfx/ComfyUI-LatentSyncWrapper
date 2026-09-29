@@ -16,6 +16,8 @@ pytorch-lightning
 librosa
 imageio
 imageio-ffmpeg
+albumentations==1.4.24
+albucore==0.0.23
 kornia
 insightface==0.7.3
 onnxruntime-gpu==1.21.0
