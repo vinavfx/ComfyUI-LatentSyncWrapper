@@ -11,3 +11,11 @@ ffmpeg-python>=0.2.0
 safetensors
 soundfile
 DeepCache
+accelerate
+pytorch-lightning
+librosa
+imageio
+kornia
+insightface==0.7.3
+onnxruntime-gpu==1.21.0
+torchcodec==0.10.*
