@@ -4,6 +4,7 @@ import torchaudio
 import uuid
 import sys
 import shutil
+import wave
 from collections.abc import Mapping
 from datetime import datetime
 
@@ -403,8 +404,10 @@ def setup_models():
     cur_dir = get_ext_dir()
     ckpt_dir = os.path.join(cur_dir, "checkpoints")
     whisper_dir = os.path.join(ckpt_dir, "whisper")
+    vae_dir = os.path.join(ckpt_dir, "vae")
     os.makedirs(ckpt_dir, exist_ok=True)
     os.makedirs(whisper_dir, exist_ok=True)
+    os.makedirs(vae_dir, exist_ok=True)
 
     # Create a temp_downloads directory in our system temp
     temp_downloads = os.path.join(MODULE_TEMP_DIR, "downloads")
@@ -457,6 +460,44 @@ def setup_models():
             print(f"3. Place them in: {ckpt_dir}")
             print(f"   with whisper/tiny.pt in: {whisper_dir}")
             raise RuntimeError("Model download failed. See instructions above.")
+
+    vae_files = ["config.json", "diffusion_pytorch_model.safetensors"]
+    missing_vae_files = [
+        filename
+        for filename in vae_files
+        if not os.path.exists(os.path.join(vae_dir, filename))
+    ]
+
+    if missing_vae_files:
+        print("Downloading the Stable Diffusion VAE required by LatentSync...")
+        try:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(
+                repo_id="stabilityai/sd-vae-ft-mse",
+                allow_patterns=vae_files,
+                local_dir=vae_dir,
+            )
+            print("LatentSync VAE downloaded successfully!")
+        except Exception as error:
+            raise RuntimeError(
+                "Failed to download the LatentSync VAE from "
+                "stabilityai/sd-vae-ft-mse"
+            ) from error
+
+    required_model_paths = [
+        unet_path,
+        whisper_path,
+        os.path.join(vae_dir, "config.json"),
+        os.path.join(vae_dir, "diffusion_pytorch_model.safetensors"),
+    ]
+    missing_model_paths = [
+        path for path in required_model_paths if not os.path.exists(path)
+    ]
+    if missing_model_paths:
+        missing_models = "\n".join(missing_model_paths)
+        raise RuntimeError(f"Required model files are missing:\n{missing_models}")
+
 
 class LatentSyncNode:
     def __init__(self):
@@ -601,9 +642,21 @@ class LatentSyncNode:
                 "sample_rate": sample_rate
             }
             
-            # Move waveform to CPU for saving
-            waveform_cpu = waveform.cpu()
-            torchaudio.save(audio_path, waveform_cpu, sample_rate)
+            audio_samples = (
+                waveform.detach().cpu().float().clamp(-1, 1) * 32767
+            ).to(torch.int16)
+            if audio_samples.dim() == 1:
+                channel_count = 1
+            else:
+                channel_count = audio_samples.shape[0]
+                audio_samples = audio_samples.transpose(0, 1)
+            with wave.open(audio_path, "wb") as audio_file:
+                audio_file.setnchannels(channel_count)
+                audio_file.setsampwidth(2)
+                audio_file.setframerate(sample_rate)
+                audio_file.writeframes(
+                    audio_samples.contiguous().numpy().tobytes()
+                )
 
             # Move frames to CPU for saving to video
             frames_cpu = frames.cpu()

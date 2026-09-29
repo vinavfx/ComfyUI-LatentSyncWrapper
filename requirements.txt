@@ -19,4 +19,3 @@ imageio-ffmpeg
 kornia
 insightface==0.7.3
 onnxruntime-gpu==1.21.0
-torchcodec==0.10.*

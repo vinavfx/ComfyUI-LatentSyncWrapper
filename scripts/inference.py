@@ -91,22 +91,11 @@ def main(config, args):
                 continue
     
     if vae is None:
-        print("Local VAE not found in any location, creating VAE with standard configuration")
-        print(f"Searched locations: {vae_locations}")
-        # Create VAE with standard SD configuration if local model doesn't exist
-        vae = AutoencoderKL(
-            in_channels=3,
-            out_channels=3,
-            down_block_types=["DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D"],
-            up_block_types=["UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D"],
-            block_out_channels=[128, 256, 512, 512],
-            layers_per_block=2,
-            act_fn="silu",
-            latent_channels=4,
-            norm_num_groups=32,
-            sample_size=512,
-        ).to(dtype=dtype)
-        print("⚠️  Using default VAE configuration - consider downloading VAE model locally for better results")
+        searched_locations = "\n".join(vae_locations)
+        raise RuntimeError(
+            "The trained LatentSync VAE could not be loaded. Searched locations:\n"
+            f"{searched_locations}"
+        )
 
     # Set VAE configuration
     vae.config.scaling_factor = 0.18215
