@@ -147,6 +147,7 @@ import math
 import torch
 import random
 import torchaudio
+import cv2  # type: ignore
 import folder_paths
 import numpy as np
 import platform
@@ -658,33 +659,45 @@ class LatentSyncNode:
                     audio_samples.contiguous().numpy().tobytes()
                 )
 
-            # Move frames to CPU for saving to video
             frames_cpu = frames.cpu()
+            frame_height = frames_cpu.shape[1]
+            frame_width = frames_cpu.shape[2]
+            ffmpeg_path = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+            if ffmpeg_path is None:
+                raise RuntimeError("FFmpeg became unavailable during inference")
             try:
-                import torchvision.io as io
-                io.write_video(temp_video_path, frames_cpu, fps=25, video_codec='h264')
-            except TypeError as e:
-                # Check if the error is specifically about macro_block_size
-                if "macro_block_size" in str(e):
-                    import imageio
-                    # Use imageio with macro_block_size parameter
-                    imageio.mimsave(temp_video_path, frames_cpu.numpy(), fps=25, codec='h264', macro_block_size=1)
-                else:
-                    # Fall back to original PyAV code for other TypeError issues
-                    import av
-                    container = av.open(temp_video_path, mode='w')
-                    stream = container.add_stream('h264', rate=25)
-                    stream.width = frames_cpu.shape[2]
-                    stream.height = frames_cpu.shape[1]
-
-                    for frame in frames_cpu:
-                        frame = av.VideoFrame.from_ndarray(frame.numpy(), format='rgb24')
-                        packet = stream.encode(frame)
-                        container.mux(packet)
-
-                    packet = stream.encode(None)
-                    container.mux(packet)
-                    container.close()
+                subprocess.run(
+                    [
+                        ffmpeg_path,
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "rawvideo",
+                        "-pix_fmt",
+                        "rgb24",
+                        "-s:v",
+                        f"{frame_width}x{frame_height}",
+                        "-r",
+                        "25",
+                        "-i",
+                        "-",
+                        "-an",
+                        "-c:v",
+                        "libx264",
+                        "-pix_fmt",
+                        "yuv420p",
+                        temp_video_path,
+                    ],
+                    input=frames_cpu.contiguous().numpy().tobytes(),
+                    capture_output=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError as error:
+                ffmpeg_error = error.stderr.decode(errors="replace")
+                raise RuntimeError(
+                    f"FFmpeg failed to create the input video: {ffmpeg_error}"
+                ) from error
 
             # Define paths to required files and configs
             inference_script_path = os.path.join(cur_dir, "scripts", "inference.py")
@@ -769,9 +782,20 @@ class LatentSyncNode:
             if not os.path.exists(output_video_path):
                 raise FileNotFoundError(f"Output video not found at: {output_video_path}")
             
-            # Read the processed video - ensure it's loaded as CPU tensor
-            processed_frames = io.read_video(output_video_path, pts_unit='sec')[0]
-            processed_frames = processed_frames.float() / 255.0
+            video_capture = cv2.VideoCapture(output_video_path)
+            output_frames = []
+            while True:
+                has_frame, output_frame = video_capture.read()
+                if not has_frame:
+                    break
+                output_frame = cv2.cvtColor(output_frame, cv2.COLOR_BGR2RGB)
+                output_frames.append(torch.from_numpy(output_frame.copy()))
+            video_capture.release()
+
+            if not output_frames:
+                raise RuntimeError("No frames were decoded from the LatentSync output")
+
+            processed_frames = torch.stack(output_frames).float() / 255.0
 
             # Ensure audio is on CPU before returning
             if torch.cuda.is_available():
